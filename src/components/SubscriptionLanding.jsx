@@ -66,9 +66,12 @@ export default function SubscriptionLanding() {
   const [yaSuscrito, setYaSuscrito] = useState(false);
   const [mock, setMock] = useState(false);
   const [config, setConfig] = useState(null);
+  const [configReady, setConfigReady] = useState(false);
+  const [heroListo, setHeroListo] = useState(false);
 
   const formRef = useRef(null);
   const heroRef = useRef(null);
+  const benefitsRef = useRef(null);
   const lenisRef = useRef(null);
   const reduceMotion = useReducedMotion();
 
@@ -91,6 +94,21 @@ export default function SubscriptionLanding() {
     };
   }, []);
 
+  useEffect(() => {
+    const lenis = lenisRef.current;
+    if (!lenis) return;
+    if (heroListo) {
+      lenis.start();
+    } else {
+      lenis.stop();
+    }
+  }, [heroListo]);
+
+  useEffect(() => {
+    const failsafe = setTimeout(() => setHeroListo(true), 4000);
+    return () => clearTimeout(failsafe);
+  }, []);
+
   const { scrollYProgress } = useScroll({
     target: heroRef,
     offset: ["start start", "end start"],
@@ -105,7 +123,7 @@ export default function SubscriptionLanding() {
   );
   const contentOpacity = useTransform(
     scrollYProgress,
-    [0, 0.75],
+    [0, 0.08],
     [1, parallax ? 0 : 1]
   );
   const badgesY = useTransform(scrollYProgress, [0, 1], [0, -60 * parallax]);
@@ -119,10 +137,46 @@ export default function SubscriptionLanding() {
       .then((snap) => {
         if (active && snap.exists()) setConfig(snap.data());
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (active) setConfigReady(true);
+      });
     return () => {
       active = false;
     };
+  }, []);
+
+  useEffect(() => {
+    if (!configReady) return undefined;
+    const raw = config?.precio;
+    const tienePrecio = raw !== undefined && raw !== null && raw !== "";
+    const timer = setTimeout(() => setHeroListo(true), tienePrecio ? 900 : 0);
+    return () => clearTimeout(timer);
+  }, [configReady, config]);
+
+  useEffect(() => {
+    const root = benefitsRef.current;
+    if (!root) return undefined;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      root
+        .querySelectorAll(".vc-benefit-card")
+        .forEach((card) => card.classList.add("is-visible"));
+      return undefined;
+    }
+    const cards = root.querySelectorAll(".vc-benefit-card");
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            entry.target.classList.add("is-visible");
+            observer.unobserve(entry.target);
+          }
+        });
+      },
+      { threshold: 0.15, rootMargin: "0px 0px -10% 0px" }
+    );
+    cards.forEach((card) => observer.observe(card));
+    return () => observer.disconnect();
   }, []);
 
   const content = mergeContent(config);
@@ -321,6 +375,14 @@ export default function SubscriptionLanding() {
 
   return (
     <div className="vc-page">
+      <div
+        className={`vc-loading-bar ${heroListo ? "is-done" : ""}`}
+        role="progressbar"
+        aria-hidden="true"
+      >
+        <span className="vc-loading-bar-fill" />
+      </div>
+
       <motion.section
         ref={heroRef}
         className={`vc-hero ${heroImage ? "vc-hero-imagen" : ""}`}
@@ -368,12 +430,22 @@ export default function SubscriptionLanding() {
 
           <motion.div className="vc-hero-layer" style={{ y: ctaY }}>
             <motion.div className="vc-hero-cta" variants={heroItem(0.46)}>
-              {content.precio !== null && content.precio !== "" && (
-                <div className="vc-price-box">
+              {content.precio !== null && content.precio !== "" ? (
+                <motion.div
+                  className="vc-price-box"
+                  initial={reduceMotion ? false : { opacity: 0, y: 14, scale: 0.96 }}
+                  animate={{ opacity: 1, y: 0, scale: 1 }}
+                  transition={{ duration: 0.6, ease: HERO_EASE }}
+                >
                   <span className="vc-price">{formatPrecio(content.precio)}</span>
                   <span className="vc-price-period">{content.precioPeriodo}</span>
+                </motion.div>
+              ) : !configReady ? (
+                <div className="vc-price-box vc-price-placeholder" aria-hidden="true">
+                  <span className="vc-price">{formatPrecio(0)}</span>
+                  <span className="vc-price-period">{content.precioPeriodo}</span>
                 </div>
-              )}
+              ) : null}
 
               <button
                 type="button"
@@ -388,7 +460,7 @@ export default function SubscriptionLanding() {
       </motion.section>
 
       <section className="vc-section">
-        <div className="vc-benefits">
+        <div className="vc-benefits" ref={benefitsRef}>
           {beneficios.map((benefit, index) => (
             <article className="vc-benefit-card" key={index}>
               <span className="vc-benefit-icon">{benefit.icon}</span>
