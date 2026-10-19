@@ -1,0 +1,308 @@
+# PROMPT: Landing Page de Suscripciones tipo BAWAX CLUB
+
+## Objetivo
+
+Crear una nueva landing page independiente para suscripciones mensuales (ej: "BVOX" / cajas mensuales con plantas, macetas, productos seleccionados, etc.), replicando EXACTAMENTE el flujo de suscripciones del proyecto "buenosaireswax" (Club de Vinilos / Bawax Club).
+
+Debes analizar y replicar el patrón funcional: formulario multi-step, guardado de datos en Firestore ANTES del checkout, creación de suscripción vía MercadoPago (Preapproval/Subscription checkout), redirección al checkout, y sincronización de estados vía Webhooks.
+
+## 1. ANÁLISIS DEL PROYECTO BASE (Referencia obligatoria)
+
+Usa como referencia el comportamiento actual del repositorio existente en `D:\proyectos\buenosaireswax` para comprender el flujo, pero crea un proyecto NUEVO y AUTÓNOMO (no modificar el original).
+
+Flujo base identificado (obligatorio a replicar):
+
+### 1.1 Frontend (Club de Vinilos)
+- Página pública: `src/components/VinylClubPage.jsx`
+- Estilos: `src/styles/VinylClub.css`
+- Formulario multi-step (4 pasos): 
+  1. Datos personales (nombre, instagram opcional, DNI)
+  2. Contacto (email, teléfono)
+  3. Envío (dirección, piso/depto opcional, ciudad, código postal)
+  4. Preferencias (selección múltiple de géneros: House, Techno, Deep)
+- Estados: `loading`, `error`, `exito`, `yaSuscrito` (si ya existe doc con `activo: true`)
+- Al enviar formulario (submit final):
+  1. Valida por paso (validación inline con touched)
+  2. Genera `subscriberId = email.trim().toLowerCase()`
+  3. Lee `doc(db, "clubvinilos", subscriberId)` en Firestore. Si existe y `activo === true` → muestra pantalla "ya sos parte"
+  4. Crea/guarda documento completo en Firestore con estado inicial: `activo: false, pendiente: true, mercadopago_preapproval_id: null, mercadopago_status: null, fechaAlta: ISOString`
+  5. Llama a `crearSuscripcion({ email, nombre })` (utils/mercadopago)
+  6. Si recibe `checkout_url` o `init_point` → guarda email en `localStorage("vinylClubEmail")` y hace `window.location.href = checkoutUrl` (redirección inmediata a MP)
+  7. Si falla MP → muestra error, NO redirige
+- UI post-envío: pantalla de éxito solicitando revisar email (cuando redirigió a MP pero aún no está autorizado) y pantalla distinta si ya activo.
+
+### 1.2 Backend (API Routes - Vercel style)
+Carpeta `api/mercadopago/`:
+- `crear-suscripcion.js`:
+  - POST. Valida `email, nombre` (requeridos). Devuelve 400 si faltan.
+  - `subscriberId = email.trim().toLowerCase()`
+  - Busca/crea doc en colección `clubvinilos/{subscriberId}`. Usa `{ merge: true }` al setear: escribe `mercadopago_plan_id = MP_PREAPPROVAL_PLAN_ID`, `mercadopago_preapproval_id = null`, `mercadopago_status = "pending"`
+  - Si doc existe y `data().activo === true` → 400 "Ya tenés una suscripción activa."
+  - Responde 200 con: `{ init_point, checkout_url, preapproval_plan_id }`. `checkout_url = https://www.mercadopago.com.ar/subscriptions/checkout?preapproval_plan_id=${MP_PREAPPROVAL_PLAN_ID}`
+  - Hardcode: `MP_PREAPPROVAL_PLAN_ID = "b9a00d38781c426a86372c2105819cf7"` (usar este patrón: ID de plan/preapproval_plan configurable por ENV)
+- `webhook.js`:
+  - Soporta GET (health), OPTIONS (CORS), POST. Headers CORS: `Access-Control-Allow-Origin: *`, métodos GET/POST/OPTIONS, headers incluyen `x-signature` (importante para MP)
+  - Tipos procesados: `subscription_preapproval`, `preapproval`, `payment`
+  - Busca suscriptor por prioridad: 1) `mercadopago_preapproval_id == preapprovalId` (query), 2) `external_reference` (doc id), 3) `payer_email` (lowercase)
+  - Obtiene estado desde MP: `fetchPreapprovalStatus(preapprovalId)` con Bearer `MP_ACCESS_TOKEN` → `https://api.mercadopago.com/preapproval/${preapprovalId}`
+  - Mapeo estados → flags: `authorized` → `{ activo: true, pendiente: false }`; `paused` → `{ activo: false, pendiente: true }`; `cancelled` → `{ activo: false, pendiente: true }`. Actualiza `mercadopago_status = status`
+  - En `authorized`: setea `fechaPrimerPago = ISO` si no existe, `fechaUltimoPago = ISO`, `fechaProximoCobro = body.data?.next_payment_date || null`. Crea documento en `historialPagos` (subcolección) con: `{ fecha: ISO, estado: "authorized", monto: number, mercadopago_payment_id: payment_id|null, type: "payment" }`
+  - En eventos `payment` (con `preapproval_id`): crea registro en `historialPagos` y actualiza `fechaUltimoPago`, `fechaProximoCobro`
+  - Ignora casos desconocidos con 200 `{ status: "ignored", ... }`
+- `status.js`: GET/POST para consultar estado por email (busca en `clubvinilos/{email}`)
+- `cancelar.js`: cancela preapproval en MP (`DELETE/PUT` a `/preapproval/${preapproval_id}`) y actualiza doc a `activo:false, pendiente:true, mercadopago_status: "cancelled"`
+
+### 1.3 Firebase Admin
+`api/_lib/firebase-admin.js`: inicializa Firebase Admin con `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`. Normaliza `\n`/`\r\n` en private key. Singleton `getFirebaseAdmin()` + `getDb()` (Firestore).
+
+### 1.4 Utils Frontend
+`src/utils/mercadopago.js`: `crearSuscripcion(data)` hace `fetch(`${API_BASE}/mercadopago/crear-suscripcion`, { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify(data) })` y retorna JSON.
+
+### 1.5 Admin (referencia)
+`AdminVinylClub.jsx` + estilos: lista suscriptores de `clubvinilos`, filtros, export CSV/XLSX. No obligatorio en landing pública pero útil para entender modelo.
+
+## 2. PROYECTO A CREAR
+
+Crear proyecto nuevo e independiente (Vite + React recomendado, igual stack base: React, Firebase Web SDK en frontend para lectura/escritura previa a checkout, Vercel API routes o equivalente para backend). Debe funcionar como landing standalone.
+
+### 2.1 Nombre del producto/suscripción
+Adaptar a temática solicitada: "Suscripciones mensuales tipo BVOX con plantas, macetas, etc."
+- Nombre del club: configurable (ej. `BVOX Club`, `Club BVOX`, `Planter Box`, etc.) pero mantener estructura.
+- Precio: configurable por env/const (no hardcodear fijo si cambia). Mostrar precio claro.
+- Preferencias/categorías: reemplazar `{house,techno,deep}` por categorías relevantes a plantas/macetas (ej. `suculentas`, `plantas_de_interior`, `macetas_ceramica`, `plantas_resistentes`, etc.) — incluir mínimo 3 y máximo 6. Iconos emojis o SVG.
+
+### 2.2 Estructura de carpetas propuesta
+
+nuevo-proyecto/
+├── api/
+│   ├── _lib/
+│   │   └── firebase-admin.js        (copiar lógica exacta)
+│   ├── mercadopago/
+│   │   ├── crear-suscripcion.js     (replicar lógica, parametrizable)
+│   │   ├── webhook.js               (replicar lógica completa)
+│   │   ├── status.js
+│   │   └── cancelar.js
+├── src/
+│   ├── components/
+│   │   ├── SubscriptionLanding.jsx   (equivalente VinylClubPage, renombrado)
+│   │   ├── SubscriptionSuccess.jsx   (opcional, estados éxito/ya activo)
+│   │   └── App.jsx / Layout
+│   ├── styles/
+│   │   └── subscription.css          (equivalente VinylClub.css, adaptado)
+│   ├── utils/
+│   │   ├── mercadopago.js            (wrapper fetch)
+│   │   └── validations.js            (opcional)
+│   ├── firebase/
+│   │   └── config.js                 (Firebase Web SDK init)
+│   ├── main.jsx
+│   └── index.css
+├── .env.example
+├── package.json
+├── vite.config.js
+├── vercel.json (opcional, para API routes)
+└── README.md
+
+## 3. MODELO DE DATOS (Firestore)
+
+Colección: `clubvinilos` (mantén nombre EXACTO para no romper compatibilidad con webhook existente? O parametrizar por `FIRESTORE_COLLECTION` env). IMPORTANTE: Replicar estructura para mantener compatibilidad con webhook. Si se cambia nombre colección, actualizar webhook y búsquedas.
+
+Documento ID = `email.trim().toLowerCase()` (subscriberId).
+
+Campos OBLIGATORIOS a guardar en paso de formulario (antes de MP):
+```js
+{
+  nombre: string (trim),
+  instagram: string (trim) | "",
+  dni: string (trim),
+  telefono: string (trim) (sin espacios),
+  correo: string (lowercase, trim),
+  direccion: string (trim),
+  departamento: string (trim) | "",
+  ciudad: string (trim),
+  codigoPostal: string (trim),
+  preferencias: string[] (ids),
+  activo: boolean,           // false inicial
+  pendiente: boolean,        // true inicial
+  fechaAlta: ISO string,
+  mercadopago_plan_id: string | null,
+  mercadopago_preapproval_id: string | null,
+  mercadopago_status: string | null, // "pending" inicial
+  fechaPrimerPago?: ISO string | null,
+  fechaUltimoPago?: ISO string | null,
+  fechaProximoCobro?: ISO string | null,
+  // campos extra opcionales para nueva temática
+  tema?: string, // "bvox" u otro
+  origen?: string, // "landing-nueva"
+}
+Subcolección historialPagos/{docId} (creada por webhook):
+{
+  fecha: ISO,
+  estado: string,
+  monto: number,
+  mercadopago_payment_id: string | null,
+  type: "payment"
+}
+4. VARIABLES DE ENTORNO (.env.example)
+Crear .env.example con EXACTOS nombres (replicar patrón):
+# Frontend (Vite - expuestos con VITE_*)
+VITE_FIREBASE_API_KEY=
+VITE_FIREBASE_AUTH_DOMAIN=
+VITE_FIREBASE_PROJECT_ID=
+VITE_FIREBASE_STORAGE_BUCKET=
+VITE_FIREBASE_MESSAGING_SENDER_ID=
+VITE_FIREBASE_APP_ID=
+VITE_API_BASE_URL=  # ej. http://localhost:5173 o https://tu-dominio.vercel.app
+
+# Backend (API Routes)
+FIREBASE_PROJECT_ID=
+FIREBASE_CLIENT_EMAIL=
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+MP_ACCESS_TOKEN=
+MP_PREAPPROVAL_PLAN_ID=b9a00d38781c426a86372c2105819cf7
+FIRESTORE_COLLECTION=clubvinilos
+Notas: FIREBASE_PRIVATE_KEY debe mantener newlines. Backend NO expone a frontend. Frontend solo necesita Web SDK.
+5. FRONTEND - COMPONENTE SubscriptionLanding
+Crear componente equivalente a VinylClubPage.jsx con estas características:
+5.1 Estados y refs
+- step (0-based), STEPS array configurable (etiquetas en español)
+- Campos: nombre, nombreInstagram, dni, telefono, correo, direccion, departamento, ciudad, codigoPostal, preferencias[]
+- loading, error, exito, yaSuscrito, touched
+5.2 Configuración temática
+Definir CATEGORIAS (preferencias) adaptable. Ejemplo sugerido para BVOX (plantas/macetas):
+const CATEGORIAS = [
+  { id: "suculentas", label: "Suculentas", icon: "🌵" },
+  { id: "interior", label: "Plantas de interior", icon: "🪴" },
+  { id: "exterior", label: "Plantas resistentes", icon: "🌿" },
+  { id: "macetas", label: "Macetas cerámicas", icon: "🏺" },
+  { id: "mix", label: "Mix sorpresa", icon: "✨" },
+]
+Permitir editar fácilmente.
+5.3 Validaciones (replicar exactamente)
+- step 0: nombre.trim() requerido, dni.trim() requerido
+- step 1: correo requerido + regex /^[^\s@]+@[^\s@]+\.[^\s@]+$/, telefono requerido (usar formatPhone que limpia no-dígitos)
+- step 2: direccion, ciudad, codigoPostal requeridos
+- step 3: preferencias.length >= 1 requerido
+- Mostrar errores inline bajo campo + banner general
+5.4 Lógica de envío (CRÍTICA - debe ser idéntica al flujo)
+ 1. checkExistingSubscription(email): getDoc(doc(db, "clubvinilos", email)) → si activo true → setYaSuscrito(true); setExito(true)
+ 2. Submit: prevenir default, validar, setLoading(true), limpiar error
+ 3. subscriberId = correo.trim().toLowerCase(); subscriberRef = doc(db, "clubvinilos", subscriberId)
+ 4. existingSnap = await getDoc(subscriberRef) → si activo → éxito ya suscrito
+ 5. Construir subscriberData con TODOS los campos (incluir tema: "bvox", origen: "landing-bvox" opcional)
+ 6. await setDoc(subscriberRef, subscriberData) (NO merge necesario aquí, guarda estado inicial completo)
+ 7. Llamar crearSuscripcion({ email: correo.trim().toLowerCase(), nombre: nombre.trim() })
+ 8. Extraer checkoutUrl = result?.checkout_url || result?.init_point || result?.sandbox_init_point
+ 9. Si existe → localStorage.setItem("vinylClubEmail", subscriberId); window.location.href = checkoutUrl; return
+10. Si falla → lanzar error con mensaje de MP o genérico
+11. try/catch/finally correcto
+5.5 UI/UX
+- Hero con título/subtítulo configurable (BVOX Club / Caja mensual)
+- Sección beneficios (3 cards): replicar estructura (.vc-benefits, .vc-benefit-card)
+- Precio destacado: .vc-price-box ($XX.XXX / mes)
+- CTA "Quiero suscribirme" → scroll a formulario (formRef)
+- Progress bar multi-step (replicar exactamente estilos/animaciones)
+- Form cards con animación fadeIn
+- Estados éxito: 2 casos (yaSuscrito + activo, o éxito tras envío a MP)
+- Mobile-first: respetar media queries (<=768px) del original
+6. BACKEND - API ROUTES
+Replicar con EXACTA lógica. Parametrizar valores sensibles por ENV.
+6.1 api/_lib/firebase-admin.js
+Copiar tal cual (normalización private key + singleton).
+6.2 api/mercadopago/crear-suscripcion.js
+Cambios permitidos: leer MP_PREAPPROVAL_PLAN_ID de process.env.MP_PREAPPROVAL_PLAN_ID (con fallback al valor original si no existe). FIRESTORE_COLLECTION opcional (default "clubvinilos").
+Validaciones y flujo idénticos. Respuesta idéntica.
+6.3 api/mercadopago/webhook.js
+Misma lógica. Buscar en colección configurable (FIRESTORE_COLLECTION o hardcode "clubvinilos" pero dejar fácil cambio). Logging útil (console.log webhook recibido). NO eliminar manejo de external_reference y payer_email (resiliencia).
+CRÍTICO: mantener búsqueda en 3 niveles y mapeo de estados exacto.
+6.4 api/mercadopago/status.js y cancelar.js
+Replicar con colección configurable.
+7. ESTILOS
+Crear src/styles/subscription.css basado en VinylClub.css. Mantener:
+- Variables CSS (--color-letra, --color-fondo, --title-font, --text-font) — usar variables globales existentes o definir
+- Clases con prefijo vc-* o renombrar a sub-* (preferible mantener prefijo para copiar estilos rápidamente: .vc-hero, .vc-section, .vc-benefits, .vc-form-card, .vc-progress, .vc-btn-primary, ...)
+- Animaciones (vcFadeIn, vcSpin)
+- Responsive completo (≤768px) con ajustes mobile (inputs font-size 16px para evitar zoom iOS)
+- Estados error/selected/loading
+Adaptar colores/espaciados si necesario pero conservar estructura y comportamiento visual.
+8. FIREBASE WEB SDK
+src/firebase/config.js:
+import { initializeApp } from "firebase/app";
+import { getFirestore } from "firebase/firestore";
+
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+};
+
+const app = initializeApp(firebaseConfig);
+export const db = getFirestore(app);
+9. INTEGRACIÓN MERCADOPAGO UTILS
+src/utils/mercadopago.js:
+const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+
+export async function crearSuscripcion(data) {
+  const response = await fetch(`${API_BASE}/api/mercadopago/crear-suscripcion`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+
+  const result = await response.json();
+  if (!response.ok) {
+    throw new Error(result?.message || "Error al crear la suscripción");
+  }
+  return result;
+}
+Nota: en Vercel API routes están bajo /api/.... Ajustar ruta correctamente.
+10. REQUISITOS TÉCNICOS Y BUENAS PRÁCTICAS
+- React + Vite (TypeScript opcional, JS está bien para replicar)
+- NO añadir comentarios innecesarios (seguir estilo original)
+- Código idiomático, reutilizar patrones existentes
+- Validación cliente + preparación para webhook (servidor fuente de verdad)
+- Seguridad: secrets solo en backend (.env), nunca exponer MP tokens
+- CORS correcto en API routes
+- Manejo de errores completo (try/catch + mensajes claros en español)
+- Responsive 100% (mobile + desktop)
+- Accesibilidad básica (inputs con labels/placeholder + aria si necesario)
+11. CONFIGURACIÓN MERCADOPAGO
+Importante:
+- MP_PREAPPROVAL_PLAN_ID: ID del plan de suscripción recurrente (preapproval plan) en MercadoPago. Debe crearse en cuenta MP (Argentina por defecto). El checkout usa ese plan.
+- MP_ACCESS_TOKEN: Access token (TEST o PROD). Webhook consulta API MP para obtener estado actualizado.
+- Webhook URL en MP: https://TU-DOMINIO/api/mercadopago/webhook (POST). Debe responder 200 rápido.
+- Ambiente: mantener lógica agnóstica entre TEST/PROD (usar env vars)
+12. PASOS A SEGUIR PARA IMPLEMENTAR
+Ejecutar en orden:
+ 1. Inicializar proyecto: npm create vite@latest (React) o usar estructura. Instalar dependencias: firebase, react-router-dom (si routing), etc.
+ 2. Crear estructura de carpetas tal como se indica
+ 3. Copiar lógica API (api/_lib + 4 rutas MP) con parametrización por ENV
+ 4. Crear Firebase Web config + utils MP
+ 5. Crear componente SubscriptionLanding.jsx adaptando temática (título, beneficios, categorías, precio). Mantener flujo 100% idéntico
+ 6. Crear estilos subscription.css (copiar VinylClub.css y ajustar nombres/colores si deseado)
+ 7. Configurar rutas (App.jsx/main.jsx) para renderizar landing en / o ruta deseada
+ 8. Crear .env.example completo
+ 9. README.md: explicar setup, env vars, MP (crear plan, configurar webhook), deploy Vercel
+10. Probar flujo local: formulario → guarda en Firestore → llama API → recibe checkout_url → redirige a MP (usar credenciales TEST)
+13. PUNTOS CRÍTICOS A NO ROMPER
+- El guardado en Firestore ANTES de llamar a crear-suscripcion (orden exacto)
+- Uso de doc(email.toLowerCase()) como ID
+- Merge true solo en API crear-suscripcion (al setear estado pending)
+- Búsqueda de preapproval en webhook (3 niveles) — NO simplificar
+- Mapeo de estados MP → activo/pendiente exacto
+- Respuesta API crear-suscripcion con checkout_url/init_point (ambos opcionales pero devolver al menos uno)
+- Redirección window.location.href (no fetch redirect)
+- Validación por paso y touched
+14. ADAPTACIÓN ESPECÍFICA BVOX
+Solicito adaptar textos/temática pero SIN cambiar lógica:
+- Hero: "BVOX Club" o nombre elegido. Subtítulo: "Suscripción mensual de plantas, macetas y selección curada"
+- Beneficios: ej. "Caja curada mensual", "Productos seleccionados", "Envío mensual incluido" o acorde a producto
+- Categorías: reemplazar géneros por preferencias de plantas (3–5 items)
+- Precio: configurable (mostrar $XX.000 / mes)
+- Texto éxito: "¡Gracias por suscribirte al BVOX Club!" + instrucción email
+- Colores/estilos: mantener estructura, ajustar paleta si se desea
+INSTRUCCIÓN FINAL
+Genera TODO el código del nuevo proyecto siguiendo este prompt al pie de la letra. Prioriza REPLICAR EL FLUJO FUNCIONAL sobre cambios cosméticos. Cualquier desviación en el orden (Firestore → MP → webhook) puede romper la sincronización de estados.
+Comenzar creando estructura completa, archivos API primero, luego frontend, estilos, configs y docs. Entregar código listo para ejecutar y desplegar.
