@@ -1,5 +1,11 @@
 import { useEffect, useRef, useState } from "react";
-import { motion, useReducedMotion, useScroll, useTransform } from "motion/react";
+import {
+  motion,
+  useReducedMotion,
+  useScroll,
+  useSpring,
+  useTransform,
+} from "motion/react";
 import Lenis from "lenis";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db } from "../firebase/config";
@@ -17,10 +23,10 @@ const heroImages = import.meta.glob("../assets/hero/*.{jpg,jpeg,png,webp,avif}",
   query: "?url",
   import: "default",
 });
-const HERO_IMAGE =
-  Object.keys(heroImages)
-    .sort()
-    .map((key) => heroImages[key])[0] || "";
+const HERO_IMAGES = Object.keys(heroImages)
+  .sort()
+  .map((key) => heroImages[key])
+  .filter(Boolean);
 
 const STEPS = ["Tus datos", "Contacto", "Envío", "Preferencias"];
 
@@ -68,6 +74,7 @@ export default function SubscriptionLanding() {
   const [config, setConfig] = useState(null);
   const [configReady, setConfigReady] = useState(false);
   const [heroListo, setHeroListo] = useState(false);
+  const [activeImage, setActiveImage] = useState(0);
 
   const formRef = useRef(null);
   const heroRef = useRef(null);
@@ -115,21 +122,20 @@ export default function SubscriptionLanding() {
   });
 
   const parallax = reduceMotion ? 0 : 1;
-  const bgY = useTransform(scrollYProgress, [0, 1], ["0%", `${15 * parallax}%`]);
-  const bgScale = useTransform(
-    scrollYProgress,
-    [0, 1],
-    [1.05, 1.05 + 0.1 * parallax]
+  const smooth = { stiffness: 110, damping: 28, mass: 0.45 };
+  const contentY = useSpring(
+    useTransform(scrollYProgress, [0, 1], [0, -64 * parallax]),
+    smooth
   );
-  const contentOpacity = useTransform(
-    scrollYProgress,
-    [0, 0.08],
-    [1, parallax ? 0 : 1]
+  const visualY = useSpring(
+    useTransform(scrollYProgress, [0, 1], [0, 52 * parallax]),
+    smooth
   );
-  const badgesY = useTransform(scrollYProgress, [0, 1], [0, -60 * parallax]);
-  const titleY = useTransform(scrollYProgress, [0, 1], [0, -110 * parallax]);
-  const subtitleY = useTransform(scrollYProgress, [0, 1], [0, -150 * parallax]);
-  const ctaY = useTransform(scrollYProgress, [0, 1], [0, -190 * parallax]);
+  const imageScale = useSpring(
+    useTransform(scrollYProgress, [0, 1], [1, 1 + 0.06 * parallax]),
+    smooth
+  );
+  const badgeY = useTransform(scrollYProgress, [0, 1], [0, -20 * parallax]);
 
   useEffect(() => {
     let active = true;
@@ -159,11 +165,11 @@ export default function SubscriptionLanding() {
     if (!root) return undefined;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       root
-        .querySelectorAll(".vc-benefit-card")
+        .querySelectorAll(".vc-benefit")
         .forEach((card) => card.classList.add("is-visible"));
       return undefined;
     }
-    const cards = root.querySelectorAll(".vc-benefit-card");
+    const cards = root.querySelectorAll(".vc-benefit");
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -182,9 +188,24 @@ export default function SubscriptionLanding() {
   const content = mergeContent(config);
   const { hero } = content;
   const clubNombre = hero.titulo;
-  const heroImage = hero.imagenUrl || HERO_IMAGE;
+  const heroOverride = (hero.imagenUrl || "").trim();
+  const heroGallery = heroOverride ? [heroOverride] : HERO_IMAGES;
+  const heroGalleryKey = heroGallery.join("|");
+  const heroGalleryCount = heroGallery.length;
   const categorias = content.categorias;
   const beneficios = content.beneficios;
+
+  useEffect(() => {
+    setActiveImage(0);
+  }, [heroGalleryKey]);
+
+  useEffect(() => {
+    if (heroGalleryCount < 2) return undefined;
+    const timer = setInterval(() => {
+      setActiveImage((current) => (current + 1) % heroGalleryCount);
+    }, 5500);
+    return () => clearInterval(timer);
+  }, [heroGalleryCount]);
 
   const updateField = (name, value) => {
     setForm((prev) => ({ ...prev, [name]: value }));
@@ -385,50 +406,35 @@ export default function SubscriptionLanding() {
 
       <motion.section
         ref={heroRef}
-        className={`vc-hero ${heroImage ? "vc-hero-imagen" : ""}`}
+        className={`vc-hero ${heroGallery.length ? "vc-hero-imagen" : ""}`}
       >
-        {heroImage && (
-          <motion.div
-            className="vc-hero-bg"
-            aria-hidden="true"
-            style={{
-              backgroundImage: `url(${heroImage})`,
-              y: bgY,
-              scale: bgScale,
-            }}
-          />
-        )}
-
         <motion.div
           className="vc-hero-inner"
           initial={reduceMotion ? "show" : "hidden"}
           animate="show"
-          style={{ opacity: contentOpacity }}
         >
-          <motion.div className="vc-hero-layer" style={{ y: badgesY }}>
-            <motion.div className="vc-hero-badges" variants={heroItem(0.1)}>
+          <motion.div className="vc-hero-content" style={{ y: contentY }}>
+            <motion.div
+              className="vc-hero-badges"
+              style={{ y: badgeY }}
+              variants={heroItem(0.1)}
+            >
               {hero.badge && <span className="vc-badge">{hero.badge}</span>}
               {import.meta.env.VITE_MOCK_MP === "true" && (
                 <span className="vc-badge vc-badge-demo">Modo demo · sin pago real</span>
               )}
             </motion.div>
-          </motion.div>
 
-          <motion.div className="vc-hero-layer" style={{ y: titleY }}>
             <motion.h1 className="vc-title" variants={heroItem(0.22)}>
               {content.hero.titulo}
             </motion.h1>
-          </motion.div>
 
-          {hero.subtitulo && (
-            <motion.div className="vc-hero-layer" style={{ y: subtitleY }}>
+            {hero.subtitulo && (
               <motion.p className="vc-subtitle" variants={heroItem(0.34)}>
                 {hero.subtitulo}
               </motion.p>
-            </motion.div>
-          )}
+            )}
 
-          <motion.div className="vc-hero-layer" style={{ y: ctaY }}>
             <motion.div className="vc-hero-cta" variants={heroItem(0.46)}>
               {content.precio !== null && content.precio !== "" ? (
                 <motion.div
@@ -456,13 +462,55 @@ export default function SubscriptionLanding() {
               </button>
             </motion.div>
           </motion.div>
+
+          {heroGallery.length > 0 && (
+            <motion.figure
+              className="vc-hero-visual"
+              style={{ y: visualY }}
+              aria-hidden="true"
+            >
+              <motion.div
+                className="vc-hero-media"
+                style={{ scale: imageScale }}
+                initial={reduceMotion ? false : { opacity: 0 }}
+                animate={{ opacity: 1 }}
+                transition={{ duration: 0.9, ease: HERO_EASE, delay: 0.2 }}
+              >
+                {heroGallery.map((src, index) => (
+                  <img
+                    key={`${src}-${index}`}
+                    className={`vc-hero-image ${index === activeImage ? "is-active" : ""}`}
+                    src={src}
+                    alt=""
+                    loading={index === 0 ? "eager" : "lazy"}
+                  />
+                ))}
+              </motion.div>
+
+              <span className="vc-hero-tag vc-hero-tag--top">
+                <span className="vc-hero-tag-icon" aria-hidden="true">
+                  🌿
+                </span>
+                Plantas seleccionadas
+              </span>
+              <span className="vc-hero-tag vc-hero-tag--bottom">
+                <span className="vc-hero-tag-icon" aria-hidden="true">
+                  🚚
+                </span>
+                Envío incluido
+              </span>
+            </motion.figure>
+          )}
         </motion.div>
       </motion.section>
 
-      <section className="vc-section">
+      <section className="vc-section vc-benefits-section">
         <div className="vc-benefits" ref={benefitsRef}>
           {beneficios.map((benefit, index) => (
-            <article className="vc-benefit-card" key={index}>
+            <article className="vc-benefit" key={index}>
+              <span className="vc-benefit-index" aria-hidden="true">
+                {String(index + 1).padStart(2, "0")}
+              </span>
               <span className="vc-benefit-icon">{benefit.icon}</span>
               <h3>{benefit.title}</h3>
               <p>{benefit.text}</p>

@@ -22,7 +22,7 @@ body {
 
 body {
   font-family: var(--text-font);
-  background: var(--color-fondo);
+  background: #eef4ea;
   color: var(--color-letra);
   -webkit-font-smoothing: antialiased;
 }
