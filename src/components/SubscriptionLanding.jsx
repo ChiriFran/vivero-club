@@ -78,7 +78,7 @@ export default function SubscriptionLanding() {
 
   const formRef = useRef(null);
   const heroRef = useRef(null);
-  const benefitsRef = useRef(null);
+  const stepsRef = useRef(null);
   const lenisRef = useRef(null);
   const reduceMotion = useReducedMotion();
 
@@ -161,15 +161,15 @@ export default function SubscriptionLanding() {
   }, [configReady, config]);
 
   useEffect(() => {
-    const root = benefitsRef.current;
+    const root = stepsRef.current;
     if (!root) return undefined;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
       root
-        .querySelectorAll(".vc-benefit")
+        .querySelectorAll(".vc-how-step")
         .forEach((card) => card.classList.add("is-visible"));
       return undefined;
     }
-    const cards = root.querySelectorAll(".vc-benefit");
+    const cards = root.querySelectorAll(".vc-how-step");
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -186,10 +186,17 @@ export default function SubscriptionLanding() {
   }, []);
 
   const content = mergeContent(config);
-  const { hero } = content;
+  const { hero, pasos } = content;
   const clubNombre = hero.titulo;
+  const heroConfigImages = Array.isArray(hero.imagenes)
+    ? hero.imagenes.map((url) => (url || "").trim()).filter(Boolean)
+    : [];
   const heroOverride = (hero.imagenUrl || "").trim();
-  const heroGallery = heroOverride ? [heroOverride] : HERO_IMAGES;
+  const heroGallery = heroConfigImages.length
+    ? heroConfigImages
+    : heroOverride
+      ? [heroOverride]
+      : HERO_IMAGES;
   const heroGalleryKey = heroGallery.join("|");
   const heroGalleryCount = heroGallery.length;
   const categorias = content.categorias;
@@ -487,35 +494,57 @@ export default function SubscriptionLanding() {
                 ))}
               </motion.div>
 
-              <span className="vc-hero-tag vc-hero-tag--top">
-                <span className="vc-hero-tag-icon" aria-hidden="true">
-                  🌿
+              {hero.imagenBadgeArriba && (
+                <span className="vc-hero-tag vc-hero-tag--top">
+                  {hero.imagenBadgeArribaIcono && (
+                    <span className="vc-hero-tag-icon" aria-hidden="true">
+                      {hero.imagenBadgeArribaIcono}
+                    </span>
+                  )}
+                  {hero.imagenBadgeArriba}
                 </span>
-                Plantas seleccionadas
-              </span>
-              <span className="vc-hero-tag vc-hero-tag--bottom">
-                <span className="vc-hero-tag-icon" aria-hidden="true">
-                  🚚
+              )}
+              {hero.imagenBadgeAbajo && (
+                <span className="vc-hero-tag vc-hero-tag--bottom">
+                  {hero.imagenBadgeAbajoIcono && (
+                    <span className="vc-hero-tag-icon" aria-hidden="true">
+                      {hero.imagenBadgeAbajoIcono}
+                    </span>
+                  )}
+                  {hero.imagenBadgeAbajo}
                 </span>
-                Envío incluido
-              </span>
+              )}
             </motion.figure>
           )}
         </motion.div>
       </motion.section>
 
-      <section className="vc-section vc-benefits-section">
-        <div className="vc-benefits" ref={benefitsRef}>
-          {beneficios.map((benefit, index) => (
-            <article className="vc-benefit" key={index}>
-              <span className="vc-benefit-index" aria-hidden="true">
-                {String(index + 1).padStart(2, "0")}
-              </span>
-              <span className="vc-benefit-icon">{benefit.icon}</span>
-              <h3>{benefit.title}</h3>
-              <p>{benefit.text}</p>
-            </article>
-          ))}
+      <section className="vc-section vc-how-section">
+        <div className="vc-how">
+          <header className="vc-how-head">
+            {pasos.eyebrow && (
+              <span className="vc-how-eyebrow">{pasos.eyebrow}</span>
+            )}
+            {pasos.titulo && <h2 className="vc-how-title">{pasos.titulo}</h2>}
+            {pasos.subtitulo && (
+              <p className="vc-how-sub">{pasos.subtitulo}</p>
+            )}
+          </header>
+
+          <div className="vc-how-steps" ref={stepsRef}>
+            {beneficios.map((benefit, index) => (
+              <article className="vc-how-step" key={index}>
+                <span className="vc-how-node">
+                  <span className="vc-how-icon">{benefit.icon}</span>
+                  <span className="vc-how-num" aria-hidden="true">
+                    {index + 1}
+                  </span>
+                </span>
+                <h3>{benefit.title}</h3>
+                <p>{benefit.text}</p>
+              </article>
+            ))}
+          </div>
         </div>
       </section>
 

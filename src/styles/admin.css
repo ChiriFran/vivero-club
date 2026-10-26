@@ -297,45 +297,102 @@
   color: #6b8475;
 }
 
-.adm-hero-preview {
-  border-radius: 14px;
-  overflow: hidden;
-  border: 1px solid var(--color-borde);
-  max-height: 260px;
-}
-
-.adm-hero-preview img {
-  width: 100%;
-  height: 260px;
-  object-fit: cover;
-  display: block;
-}
-
-/* Beneficios */
-.adm-beneficio-row {
+/* Imágenes del hero */
+.adm-image-row {
   display: grid;
-  grid-template-columns: 64px 1fr 1.4fr 40px;
+  grid-template-columns: 72px 1fr 40px;
   gap: 10px;
   align-items: center;
 }
 
-.adm-beneficio-row input {
+.adm-image-thumb {
+  width: 72px;
+  height: 56px;
+  border-radius: 9px;
+  overflow: hidden;
+  border: 1px solid var(--color-borde);
+  background: #eef4ea;
+}
+
+.adm-image-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.adm-image-row input,
+.adm-image-add input {
   font-family: var(--text-font);
   font-size: 14px;
   padding: 10px 12px;
   border: 1px solid var(--color-borde);
   border-radius: 10px;
   background: #fbfdfa;
+  color: var(--color-letra);
 }
 
-.adm-beneficio-row input:focus {
+.adm-image-row input:focus,
+.adm-image-add input:focus {
   outline: none;
   border-color: var(--color-primario);
+  box-shadow: 0 0 0 3px rgba(47, 125, 79, 0.14);
+  background: #ffffff;
 }
 
+.adm-image-add {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.adm-image-add input {
+  flex: 1;
+}
+
+/* Pasos */
+.adm-step-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid var(--color-borde);
+  border-radius: 14px;
+  background: #fbfdfa;
+}
+
+.adm-step-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.adm-step-index {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #6b8475;
+}
+
+.adm-step-fields {
+  display: grid;
+  grid-template-columns: 90px 1fr;
+  gap: 12px;
+}
+
+.adm-field-icon input,
 .adm-beneficio-icon {
   text-align: center;
   font-size: 18px;
+}
+
+/* Preferencias */
+.adm-cat-row {
+  display: grid;
+  grid-template-columns: 90px 1fr 1.3fr 40px;
+  gap: 10px;
+  align-items: end;
 }
 
 .adm-icon-btn {
@@ -586,12 +643,24 @@
     grid-template-columns: 1fr;
   }
 
-  .adm-beneficio-row {
+  .adm-step-fields,
+  .adm-cat-row {
     grid-template-columns: 1fr;
   }
 
+  .adm-field-icon input,
   .adm-beneficio-icon {
     text-align: left;
+  }
+
+  .adm-image-add {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .adm-image-row .adm-icon-btn,
+  .adm-step-editor-head .adm-icon-btn {
+    width: 34px;
   }
 
   .adm-icon-btn {

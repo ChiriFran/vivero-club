@@ -6,24 +6,35 @@ export const DEFAULT_CONTENT = {
       "Suscribite a nuestro club del vivero y recibí cada mes una caja con plantas, macetas y productos seleccionados en tu puerta.",
     boton: "Quiero suscribirme",
     imagenUrl: "",
+    imagenes: [],
+    imagenBadgeArribaIcono: "🌿",
+    imagenBadgeArriba: "Plantas seleccionadas",
+    imagenBadgeAbajoIcono: "🚚",
+    imagenBadgeAbajo: "Envío incluido",
   },
   precio: null,
   precioPeriodo: "/ mes",
+  pasos: {
+    eyebrow: "Cómo funciona",
+    titulo: "Tu caja, paso a paso",
+    subtitulo:
+      "Elegís lo que te gusta, armamos una selección pensada para vos y la recibís cada mes en tu puerta. Simple, flexible y sin sorpresas.",
+  },
   beneficios: [
     {
       icon: "📦",
-      title: "Caja curada mensual",
-      text: "Seleccionamos plantas y productos según tus preferencias.",
+      title: "Elegís tus preferencias",
+      text: "Contás qué plantas, macetas y productos te gustan para que tu caja tenga sentido en tu espacio.",
     },
     {
       icon: "🌱",
-      title: "Productos seleccionados",
-      text: "Materiales de calidad y ejemplares cuidados por especialistas.",
+      title: "Preparamos tu selección",
+      text: "Nuestro equipo elige ejemplares y materiales de calidad, cuidando cada detalle de la caja.",
     },
     {
       icon: "🚚",
-      title: "Envío mensual incluido",
-      text: "Recibís tu caja todos los meses sin costo extra de envío.",
+      title: "La recibís en casa",
+      text: "Llega todos los meses con envío incluido. Podés pausar o cancelar cuando quieras.",
     },
   ],
   categorias: [
@@ -45,6 +56,7 @@ export function mergeContent(config) {
         ? DEFAULT_CONTENT.precio
         : config.precio,
     precioPeriodo: config.precioPeriodo || DEFAULT_CONTENT.precioPeriodo,
+    pasos: { ...DEFAULT_CONTENT.pasos, ...(config.pasos || {}) },
     beneficios:
       Array.isArray(config.beneficios) && config.beneficios.length
         ? config.beneficios

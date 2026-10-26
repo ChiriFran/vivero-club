@@ -15,3 +15,9 @@ Se ordenan alfabéticamente, por eso conviene nombrarlas `01-hero.jpg`, `02-hero
 `03-hero.jpg`, etc. Para cambiar una foto, reemplazá el archivo manteniendo el nombre.
 
 Con una sola imagen se muestra fija, sin rotación.
+
+## Desde el admin
+
+En **Ajustes → Hero · imágenes** podés pegar URLs o subir archivos. Si agregás
+imágenes ahí, reemplazan a las de esta carpeta; si borrás todas, se vuelven a usar
+estas.
