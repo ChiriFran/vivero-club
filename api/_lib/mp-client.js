@@ -19,7 +19,15 @@ async function mpFetch(path, options = {}) {
   });
 
   const text = await response.text();
-  const data = text ? JSON.parse(text) : null;
+  let data = null;
+
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      data = { message: text.slice(0, 300) };
+    }
+  }
 
   if (!response.ok) {
     const message =
@@ -65,6 +73,42 @@ export async function getPayment(paymentId) {
   return mpFetch(`/v1/payments/${paymentId}`);
 }
 
+export async function getAuthorizedPayment(authorizedPaymentId) {
+  return mpFetch(`/authorized_payments/${authorizedPaymentId}`);
+}
+
+export async function searchAuthorizedPayments(
+  preapprovalId,
+  { offset = 0, limit = 50 } = {}
+) {
+  const params = new URLSearchParams({
+    preapproval_id: String(preapprovalId),
+    offset: String(offset),
+    limit: String(limit),
+  });
+  return mpFetch(`/authorized_payments/search?${params.toString()}`);
+}
+
+export async function listAuthorizedPayments(
+  preapprovalId,
+  { limit = 50, maxPages = 40 } = {}
+) {
+  const all = [];
+  let offset = 0;
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const data = await searchAuthorizedPayments(preapprovalId, { offset, limit });
+    const batch = Array.isArray(data?.results) ? data.results : [];
+    all.push(...batch);
+
+    const total = Number(data?.paging?.total ?? Infinity);
+    if (!batch.length || batch.length < limit || all.length >= total) break;
+    offset += batch.length;
+  }
+
+  return all;
+}
+
 export async function cancelPreapproval(preapprovalId) {
   return mpFetch(`/preapproval/${preapprovalId}`, {
     method: "PUT",
@@ -72,12 +116,11 @@ export async function cancelPreapproval(preapprovalId) {
   });
 }
 
-export function mapPreapprovalStatus(status) {
-  if (status === "authorized") return { activo: true, pendiente: false };
-  if (status === "paused") return { activo: false, pendiente: true };
-  if (status === "cancelled") return { activo: false, pendiente: true };
-  if (status === "pending") return { activo: false, pendiente: true };
-  return null;
+export async function updatePreapprovalStatus(preapprovalId, status) {
+  return mpFetch(`/preapproval/${preapprovalId}`, {
+    method: "PUT",
+    body: JSON.stringify({ status }),
+  });
 }
 
 function parseSignatureHeader(header) {
@@ -105,7 +148,7 @@ export function verifyWebhookSignature({ req, dataId }) {
   const requestId = req.headers["x-request-id"];
   const { ts, v1 } = parseSignatureHeader(header);
 
-  if (!ts || !v1) return false;
+  if (!ts || !v1 || !requestId) return false;
 
   const manifest = `id:${String(dataId).toLowerCase()};request-id:${requestId};ts:${ts};`;
   const expected = createHmac("sha256", secret)

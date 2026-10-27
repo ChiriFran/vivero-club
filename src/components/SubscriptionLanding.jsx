@@ -9,7 +9,7 @@ import {
 import Lenis from "lenis";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { db } from "../firebase/config";
-import { crearSuscripcion } from "../utils/mercadopago";
+import { crearSuscripcion, verificarEstado } from "../utils/mercadopago";
 import { formatPhone, isValidEmail, formatPrecio } from "../utils/validations";
 import { mergeContent } from "../config/defaults";
 import SubscriptionSuccess from "./SubscriptionSuccess";
@@ -17,6 +17,7 @@ import SubscriptionSuccess from "./SubscriptionSuccess";
 const COLLECTION = import.meta.env.VITE_FIRESTORE_COLLECTION || "suscriptores";
 const CONFIG_COLLECTION = "config";
 const CONFIG_DOC = "landing";
+const EMAIL_STORAGE_KEY = "clubSubscriberEmail";
 
 const heroImages = import.meta.glob("../assets/hero/*.{jpg,jpeg,png,webp,avif}", {
   eager: true,
@@ -136,6 +137,41 @@ export default function SubscriptionLanding() {
     smooth
   );
   const badgeY = useTransform(scrollYProgress, [0, 1], [0, -20 * parallax]);
+
+  useEffect(() => {
+    let active = true;
+    const storedEmail =
+      localStorage.getItem(EMAIL_STORAGE_KEY) ||
+      localStorage.getItem("vinylClubEmail");
+
+    if (!storedEmail) return undefined;
+
+    const email = storedEmail.trim().toLowerCase();
+
+    verificarEstado(email)
+      .then((status) => {
+        if (!active) return;
+        if (status?.existe && status?.activo === true) {
+          setYaSuscrito(true);
+          setExito(true);
+        }
+      })
+      .catch(() => {
+        getDoc(doc(db, COLLECTION, email))
+          .then((snap) => {
+            if (!active || !snap.exists()) return;
+            if (snap.data()?.activo === true) {
+              setYaSuscrito(true);
+              setExito(true);
+            }
+          })
+          .catch(() => {});
+      });
+
+    return () => {
+      active = false;
+    };
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -304,13 +340,22 @@ export default function SubscriptionLanding() {
       const correo = form.correo.trim().toLowerCase();
       const subscriberId = correo;
       const subscriberRef = doc(db, COLLECTION, subscriberId);
-      const existingSnap = await getDoc(subscriberRef);
+      let existing = null;
 
-      if (existingSnap.exists() && existingSnap.data()?.activo === true) {
+      try {
+        const existingSnap = await getDoc(subscriberRef);
+        existing = existingSnap.exists() ? existingSnap.data() || {} : null;
+      } catch {
+        existing = null;
+      }
+
+      if (existing?.activo === true) {
         setYaSuscrito(true);
         setExito(true);
         return;
       }
+
+      const now = new Date().toISOString();
 
       const subscriberData = {
         nombre: form.nombre.trim(),
@@ -326,18 +371,30 @@ export default function SubscriptionLanding() {
         preferencias: form.preferencias,
         activo: false,
         pendiente: true,
-        fechaAlta: new Date().toISOString(),
-        mercadopago_plan_id: null,
-        mercadopago_preapproval_id: null,
-        mercadopago_status: null,
+        fechaAlta: existing?.fechaAlta || now,
+        mercadopago_plan_id: existing?.mercadopago_plan_id || null,
+        mercadopago_preapproval_id:
+          existing?.mercadopago_preapproval_id || null,
+        mercadopago_status: "pending",
+        fechaPrimerPago: null,
+        fechaUltimoPago: null,
+        fechaProximoCobro: null,
+        fechaCancelacion: null,
         tema: "vivero",
         origen: "landing-vivero",
       };
 
-      await setDoc(subscriberRef, subscriberData);
+      try {
+        await setDoc(subscriberRef, subscriberData, { merge: true });
+      } catch (firestoreError) {
+        console.warn(
+          "No se pudo guardar el suscriptor en Firestore desde el navegador:",
+          firestoreError.message
+        );
+      }
 
       if (import.meta.env.VITE_MOCK_MP === "true") {
-        localStorage.setItem("clubSubscriberEmail", subscriberId);
+        localStorage.setItem(EMAIL_STORAGE_KEY, subscriberId);
         setMock(true);
         setExito(true);
         return;
@@ -346,10 +403,11 @@ export default function SubscriptionLanding() {
       const result = await crearSuscripcion({
         email: subscriberId,
         nombre: form.nombre.trim(),
+        suscriptor: subscriberData,
       });
 
       if (result?.mock) {
-        localStorage.setItem("clubSubscriberEmail", subscriberId);
+        localStorage.setItem(EMAIL_STORAGE_KEY, subscriberId);
         setMock(true);
         setExito(true);
         return;
@@ -359,7 +417,7 @@ export default function SubscriptionLanding() {
         result?.checkout_url || result?.init_point || result?.sandbox_init_point;
 
       if (checkoutUrl) {
-        localStorage.setItem("clubSubscriberEmail", subscriberId);
+        localStorage.setItem(EMAIL_STORAGE_KEY, subscriberId);
         window.location.href = checkoutUrl;
         return;
       }

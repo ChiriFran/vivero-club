@@ -1,4 +1,5 @@
-import admin from "firebase-admin";
+import { cert, getApp, getApps, initializeApp } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
 
 let appInstance = null;
 
@@ -14,8 +15,9 @@ function normalizePrivateKey(key) {
 export function getFirebaseAdmin() {
   if (appInstance) return appInstance;
 
-  if (admin.apps.length) {
-    appInstance = admin.app();
+  const apps = getApps();
+  if (apps.length) {
+    appInstance = getApp();
     return appInstance;
   }
 
@@ -29,8 +31,8 @@ export function getFirebaseAdmin() {
     );
   }
 
-  appInstance = admin.initializeApp({
-    credential: admin.credential.cert({
+  appInstance = initializeApp({
+    credential: cert({
       projectId,
       clientEmail,
       privateKey,
@@ -42,11 +44,9 @@ export function getFirebaseAdmin() {
 
 export function getDb() {
   const app = getFirebaseAdmin();
-  return admin.firestore(app);
+  return getFirestore(app);
 }
 
 export function getCollectionName() {
   return process.env.FIRESTORE_COLLECTION || "suscriptores";
 }
-
-export default admin;

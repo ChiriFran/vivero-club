@@ -39,11 +39,14 @@ function toSubscriber(id, data) {
     preferencias: Array.isArray(data.preferencias) ? data.preferencias : [],
     activo: data.activo === true,
     pendiente: data.pendiente === true,
+    mercadopago_plan_id: data.mercadopago_plan_id || null,
+    mercadopago_preapproval_id: data.mercadopago_preapproval_id || null,
     mercadopago_status: data.mercadopago_status || null,
     fechaAlta: data.fechaAlta || null,
     fechaPrimerPago: data.fechaPrimerPago || null,
     fechaUltimoPago: data.fechaUltimoPago || null,
     fechaProximoCobro: data.fechaProximoCobro || null,
+    fechaCancelacion: data.fechaCancelacion || null,
   };
 }
 
@@ -108,16 +111,54 @@ export default async function handler(req, res) {
         );
       } else if (action === "pausar") {
         await ref.set(
-          { activo: false, pendiente: true, mercadopago_status: "paused" },
+          {
+            activo: false,
+            pendiente: true,
+            mercadopago_status: "paused",
+            fechaProximoCobro: null,
+          },
           { merge: true }
         );
       } else if (action === "cancelar") {
-        await cancelPreapproval(current.mercadopago_preapproval_id);
+        if (
+          current.mercadopago_preapproval_id &&
+          process.env.MOCK_MP !== "true"
+        ) {
+          const cancelled = await cancelPreapproval(
+            current.mercadopago_preapproval_id
+          );
+          if (!cancelled) {
+            return res.status(502).json({
+              message:
+                "No se pudo cancelar en MercadoPago. No se modificó el estado local.",
+            });
+          }
+        }
         await ref.set(
-          { activo: false, pendiente: true, mercadopago_status: "cancelled" },
+          {
+            activo: false,
+            pendiente: false,
+            mercadopago_status: "cancelled",
+            fechaCancelacion: new Date().toISOString(),
+            fechaProximoCobro: null,
+          },
           { merge: true }
         );
       } else if (action === "eliminar") {
+        if (
+          current.mercadopago_preapproval_id &&
+          process.env.MOCK_MP !== "true"
+        ) {
+          const cancelled = await cancelPreapproval(
+            current.mercadopago_preapproval_id
+          );
+          if (!cancelled) {
+            return res.status(502).json({
+              message:
+                "No se pudo cancelar en MercadoPago. No se eliminó el suscriptor.",
+            });
+          }
+        }
         await ref.delete();
         return res.status(200).json({ status: "deleted", email: id });
       } else {

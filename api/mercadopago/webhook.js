@@ -1,10 +1,18 @@
 import { getDb, getCollectionName } from "../_lib/firebase-admin.js";
 import {
-  getPreapproval,
+  getAuthorizedPayment,
   getPayment,
-  mapPreapprovalStatus,
+  getPreapproval,
   verifyWebhookSignature,
-} from "../_lib/mercadopago.js";
+} from "../_lib/mp-client.js";
+import {
+  applyPaidPayment,
+  authorizedPaymentInfo,
+  buildPreapprovalUpdate,
+  findSubscriber,
+  paymentInfo,
+  upsertHistorial,
+} from "../_lib/club.js";
 
 function setCors(res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -15,112 +23,214 @@ function setCors(res) {
   );
 }
 
-async function findSubscriber(db, collection, { preapprovalId, externalReference, payerEmail }) {
-  if (externalReference) {
-    const byRef = await db
-      .collection(collection)
-      .doc(String(externalReference).trim().toLowerCase())
-      .get();
-    if (byRef.exists) return byRef;
+function resolveType(body) {
+  const type = body?.type || body?.topic || null;
+  if (type) return type;
+  const action = body?.action;
+  if (typeof action === "string" && action.includes(".")) {
+    return action.split(".")[0];
   }
-
-  if (preapprovalId) {
-    const byPreapproval = await db
-      .collection(collection)
-      .where("mercadopago_preapproval_id", "==", preapprovalId)
-      .limit(1)
-      .get();
-    if (!byPreapproval.empty) return byPreapproval.docs[0];
-  }
-
-  if (payerEmail) {
-    const byEmail = await db
-      .collection(collection)
-      .doc(payerEmail.trim().toLowerCase())
-      .get();
-    if (byEmail.exists) return byEmail;
-  }
-
-  return null;
+  return action || null;
 }
 
 async function handlePreapproval(db, collection, dataId) {
+  const now = new Date().toISOString();
   const preapproval = await getPreapproval(dataId);
-  const status = preapproval.status || null;
-  const flags = mapPreapprovalStatus(status);
+
+  if (!preapproval || typeof preapproval !== "object") {
+    throw new Error("MercadoPago devolvió una respuesta inválida.");
+  }
 
   const subSnap = await findSubscriber(db, collection, {
-    preapprovalId: String(preapproval.id || dataId),
-    externalReference: preapproval.external_reference,
-    payerEmail: preapproval.payer_email,
+    preapprovalId: preapproval?.id ? String(preapproval.id) : String(dataId),
+    externalReference: preapproval?.external_reference,
+    payerEmail: preapproval?.payer_email,
   });
 
   if (!subSnap) return { status: "not_found", preapprovalId: dataId };
 
-  const now = new Date().toISOString();
-  const update = {
-    mercadopago_preapproval_id: String(preapproval.id || dataId),
-    mercadopago_status: status,
-  };
+  const current = subSnap.data() || {};
+  const update = buildPreapprovalUpdate(preapproval, current, now);
 
-  if (flags) Object.assign(update, flags);
-
-  if (status === "authorized") {
-    const current = subSnap.data() || {};
-    if (!current.fechaPrimerPago) update.fechaPrimerPago = now;
-    update.fechaUltimoPago = now;
-    update.fechaProximoCobro = preapproval.next_payment_date || null;
-
-    await subSnap.ref.collection("historialPagos").add({
-      fecha: now,
-      estado: "authorized",
-      monto: Number(preapproval.auto_recurring?.transaction_amount ?? 0),
-      mercadopago_preapproval_id: String(preapproval.id || dataId),
-      type: "preapproval",
-    });
+  if (preapproval?.status === "authorized" && !current.fechaUltimoPago) {
+    update.activo = false;
+    update.pendiente = true;
   }
 
   await subSnap.ref.set(update, { merge: true });
-  return { status: "updated", preapprovalId: dataId, mpStatus: status };
+
+  return {
+    status: "updated",
+    source: "preapproval",
+    preapprovalId: dataId,
+    mpStatus: preapproval?.status || null,
+    activo: update.activo === true,
+  };
+}
+
+async function handleAuthorizedPayment(db, collection, dataId) {
+  const now = new Date().toISOString();
+  const rawAuthorizedPayment = await getAuthorizedPayment(dataId);
+  let authorizedPayment = rawAuthorizedPayment;
+
+  if (
+    rawAuthorizedPayment?.payment &&
+    typeof rawAuthorizedPayment.payment !== "object"
+  ) {
+    try {
+      const payment = await getPayment(rawAuthorizedPayment.payment);
+      authorizedPayment = { ...rawAuthorizedPayment, payment };
+    } catch (error) {
+      console.warn(
+        "No se pudo consultar el pago del cobro autorizado:",
+        error.message
+      );
+    }
+  }
+
+  const info = authorizedPaymentInfo(authorizedPayment, now);
+
+  let preapproval = null;
+  if (info.preapprovalId) {
+    try {
+      preapproval = await getPreapproval(info.preapprovalId);
+    } catch (error) {
+      console.warn(
+        "No se pudo consultar el preapproval del pago autorizado:",
+        error.message
+      );
+    }
+  }
+
+  const subSnap = await findSubscriber(db, collection, {
+    preapprovalId: info.preapprovalId,
+    externalReference: preapproval?.external_reference,
+    payerEmail:
+      authorizedPayment?.payer?.email ||
+      preapproval?.payer_email ||
+      authorizedPayment?.payer_email,
+  });
+
+  if (!subSnap) {
+    return { status: "not_found", authorizedPaymentId: dataId };
+  }
+
+  const current = subSnap.data() || {};
+
+  if (!preapproval && current.mercadopago_preapproval_id) {
+    try {
+      preapproval = await getPreapproval(current.mercadopago_preapproval_id);
+    } catch (error) {
+      console.warn(
+        "No se pudo consultar el preapproval del suscriptor:",
+        error.message
+      );
+    }
+  }
+
+  const saved = await upsertHistorial(subSnap.ref, info, now);
+
+  if (info.paid) {
+    const update = await applyPaidPayment({
+      subscriberRef: subSnap.ref,
+      current,
+      info,
+      preapproval,
+    });
+
+    return {
+      status: "updated",
+      source: "authorized_payment",
+      authorizedPaymentId: dataId,
+      paymentId: info.paymentId,
+      mpStatus: info.estado,
+      historialId: saved?.id || null,
+      activo: update.activo === true,
+    };
+  }
+
+  return {
+    status: "stored",
+    source: "authorized_payment",
+    authorizedPaymentId: dataId,
+    paymentId: info.paymentId,
+    mpStatus: info.estado,
+    historialId: saved?.id || null,
+  };
 }
 
 async function handlePayment(db, collection, dataId) {
+  const now = new Date().toISOString();
   const payment = await getPayment(dataId);
-  const preapprovalId =
-    payment.preapproval_id ||
-    payment.metadata?.preapproval_id ||
-    payment.point_of_interaction?.transaction_data?.subscription_id ||
-    null;
+  const info = paymentInfo(payment, now);
+
+  if (!info.preapprovalId && !payment?.external_reference) {
+    return {
+      status: "ignored",
+      reason: "pago sin preapproval ni external_reference",
+    };
+  }
+
+  let preapproval = null;
+  if (info.preapprovalId) {
+    try {
+      preapproval = await getPreapproval(info.preapprovalId);
+    } catch (error) {
+      console.warn(
+        "No se pudo consultar el preapproval del pago:",
+        error.message
+      );
+    }
+  }
 
   const subSnap = await findSubscriber(db, collection, {
-    preapprovalId: preapprovalId ? String(preapprovalId) : null,
-    externalReference: payment.external_reference,
-    payerEmail: payment.payer?.email,
+    preapprovalId: info.preapprovalId,
+    externalReference:
+      payment?.external_reference || preapproval?.external_reference,
+    payerEmail: payment?.payer?.email || preapproval?.payer_email,
   });
 
   if (!subSnap) return { status: "not_found", paymentId: dataId };
+  const current = subSnap.data() || {};
 
-  const now = new Date().toISOString();
-  const estado = payment.status || "unknown";
-
-  await subSnap.ref.collection("historialPagos").add({
-    fecha: now,
-    estado,
-    monto: Number(payment.transaction_amount ?? 0),
-    mercadopago_payment_id: String(dataId),
-    mercadopago_preapproval_id: preapprovalId ? String(preapprovalId) : null,
-    type: "payment",
-  });
-
-  const update = { fechaUltimoPago: now };
-  if (estado === "approved") {
-    update.activo = true;
-    update.pendiente = false;
-    update.mercadopago_status = "authorized";
+  if (!preapproval && current.mercadopago_preapproval_id) {
+    try {
+      preapproval = await getPreapproval(current.mercadopago_preapproval_id);
+    } catch (error) {
+      console.warn(
+        "No se pudo consultar el preapproval del suscriptor:",
+        error.message
+      );
+    }
   }
 
-  await subSnap.ref.set(update, { merge: true });
-  return { status: "updated", paymentId: dataId, mpStatus: estado };
+  const saved = await upsertHistorial(subSnap.ref, info, now);
+
+  if (info.paid) {
+    const update = await applyPaidPayment({
+      subscriberRef: subSnap.ref,
+      current,
+      info,
+      preapproval,
+    });
+
+    return {
+      status: "updated",
+      source: "payment",
+      paymentId: dataId,
+      mpStatus: info.estado,
+      historialId: saved?.id || null,
+      activo: update.activo === true,
+    };
+  }
+
+  return {
+    status: "stored",
+    source: "payment",
+    paymentId: dataId,
+    mpStatus: info.estado,
+    historialId: saved?.id || null,
+  };
 }
 
 export default async function handler(req, res) {
@@ -137,11 +247,27 @@ export default async function handler(req, res) {
   }
 
   try {
-    const body = typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
-    const type = body.type || body.topic || body.action || null;
-    const dataId = body.data?.id || body.data_id || body.id || req.query?.["data.id"];
+    const body =
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body || {};
+    const type = resolveType(body);
+    const action = body.action || null;
+    const dataId =
+      body.data?.id ||
+      body.data_id ||
+      body.id ||
+      req.query?.["data.id"] ||
+      req.query?.id ||
+      null;
 
-    console.log("Webhook MercadoPago:", type, dataId);
+    console.log(
+      "Webhook MercadoPago:",
+      JSON.stringify({
+        type,
+        action,
+        id: dataId,
+        data: body.data || null,
+      })
+    );
 
     const valid = verifyWebhookSignature({ req, dataId });
     if (!valid) {
@@ -161,7 +287,19 @@ export default async function handler(req, res) {
       return res.status(200).json(result);
     }
 
-    if (type === "payment" || type === "subscription_authorized_payment") {
+    if (
+      type === "subscription_authorized_payment" ||
+      type === "authorized_payment"
+    ) {
+      const result = await handleAuthorizedPayment(
+        db,
+        collection,
+        String(dataId)
+      );
+      return res.status(200).json(result);
+    }
+
+    if (type === "payment") {
       const result = await handlePayment(db, collection, String(dataId));
       return res.status(200).json(result);
     }

@@ -5,7 +5,7 @@ const AdminPage = lazy(() => import("./admin/AdminPage"));
 
 function isAdminRoute() {
   const path = window.location.pathname.replace(/\/+$/, "");
-  return path.endsWith("/admin");
+  return path.endsWith("/admin") || path.includes("/admin/");
 }
 
 export default function App() {

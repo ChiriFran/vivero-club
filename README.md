@@ -18,8 +18,9 @@ en MercadoPago (Preapproval Plan) → redirección al checkout → sincronizaci�
 api/
   _lib/firebase-admin.js
   _lib/admin-auth.js
+  _lib/club.js
+  _lib/mp-client.js
   admin/
-    login.js
     config.js
     suscriptores.js
   mercadopago/
@@ -27,6 +28,8 @@ api/
     webhook.js
     status.js
     cancelar.js
+    pausar.js
+    sync-pagos.js
 src/
   components/SubscriptionLanding.jsx
   components/SubscriptionSuccess.jsx
@@ -34,7 +37,7 @@ src/
   firebase/config.js
   styles/subscription.css
   styles/admin.css
-  utils/mercadopago.js
+  utils/mercadopago.js   <- cliente HTTP del frontend
   utils/admin.js
   utils/validations.js
   assets/hero/   <- imágenes de fondo del hero (ver src/assets/hero/README.md)
@@ -85,7 +88,8 @@ Ambas deben ir en `false` en producción.
    `MP_PREAPPROVAL_PLAN_ID`.
 2. Generá un **Access Token** (TEST o PROD) y cargalo en `MP_ACCESS_TOKEN`.
 3. Configurá el webhook en MP apuntando a `https://TU-DOMINIO/api/mercadopago/webhook` (POST),
-   suscripto a los eventos **`preapproval`** y **`payment`**.
+   suscripto a los eventos **`preapproval`**, **`subscription_authorized_payment`** y
+   **`payment`**.
 4. Copiá la **clave secreta** del webhook (MP → Tus integraciones → Webhooks) en
    `MP_WEBHOOK_SECRET`. Si está vacía, el webhook **no valida la firma** (solo para desarrollo).
 5. Seteá `MP_BACK_URL=https://TU-DOMINIO` para las `back_url` y `notification_url`.
@@ -118,13 +122,26 @@ ID de documento = `email.trim().toLowerCase()`.
   activo: false, pendiente: true,
   fechaAlta: ISOString,
   mercadopago_plan_id, mercadopago_preapproval_id, mercadopago_status,
-  fechaPrimerPago, fechaUltimoPago, fechaProximoCobro,
+  fechaPrimerPago, fechaUltimoPago, fechaProximoCobro, fechaCancelacion,
   tema: "vivero", origen: "landing-vivero"
 }
 ```
 
-Subcolección `historialPagos/{docId}` creada por el webhook con
-`{ fecha, estado, monto, mercadopago_payment_id, type: "payment" }`.
+Subcolección `historialPagos/{docId}` creada por el webhook/sync con
+`{ fecha, estado, monto, moneda, mercadopago_payment_id, mercadopago_authorized_payment_id, mercadopago_preapproval_id, type: "payment", actualizadoEn }`.
+Los ids son determinísticos (`payment_{paymentId}`) para evitar duplicados.
+
+Endpoints de suscripciones:
+
+- `POST /api/mercadopago/crear-suscripcion`: crea el preapproval y devuelve `init_point`.
+- `GET /api/mercadopago/status?email=...`: estado del suscriptor + historial de pagos.
+- `POST /api/mercadopago/cancelar`: cancela en MercadoPago y actualiza Firestore.
+- `POST /api/mercadopago/pausar`: pausa o reactiva el preapproval en MercadoPago.
+- `POST /api/mercadopago/sync-pagos`: sincroniza un email, lista de emails o todos.
+- `POST /api/mercadopago/webhook`: recibe y procesa eventos de MercadoPago.
+
+Los endpoints de sincronización, pausa y cancelación requieren un token de Firebase
+(`Authorization: Bearer <idToken>`) de un UID incluido en `ADMIN_UIDS`.
 
 ### Configuración de la landing
 
@@ -143,7 +160,7 @@ La landing lee este documento al cargar y usa los valores de `.env` como fallbac
 
 ## Panel de administración
 
-Disponible en `/admin`. Usa **Firebase Authentication** (email/contraseña):
+Disponible en `/admin` (y `/admin/club`). Usa **Firebase Authentication** (email/contraseña):
 
 1. En Firebase Console → **Authentication** → habilitá el proveedor
    **Email/Password**.
@@ -154,13 +171,16 @@ El login se hace con Firebase Auth en el frontend. El panel lee y escribe **dire
 Firestore** desde el navegador; el control de acceso se hace con las **reglas de seguridad** de
 Firestore (ver más abajo), autorizando los UID listados en `ADMIN_UIDS`.
 
-> Por esto el panel funciona con `npm run dev`. La única función serverless necesaria en
-> producción es el **webhook de MercadoPago** (`/api/mercadopago/webhook`).
+> Para probar el panel con sincronización, pausa o cancelación real contra MercadoPago usá
+> `npm run dev:full` (Vercel dev). La landing y las acciones directas sobre Firestore
+> (activar/eliminar) siguen funcionando con `npm run dev`.
 
 Incluye:
 
-- **Suscriptores**: listado, estadísticas (total/activos/pendientes/cancelados), búsqueda, filtros
-  por estado, acciones (activar, pausar, cancelar, eliminar) y export CSV.
+- **Suscriptores**: listado con deduplicación por DNI/email, estadísticas (total, activos, sin
+  pago, pendientes, abandonados y cancelados), búsqueda, filtros por estado, acciones (activar,
+  pausar, sincronizar, cancelar, eliminar), historial de pagos expandible, sincronización por
+  lotes contra MercadoPago y export a Excel.
 - **Ajustes de la landing**: hero (badge, título, subtítulo, botón e imagen por URL o subida a
   Firebase Storage), precio, beneficios (cards) y preferencias del formulario.
 
@@ -187,6 +207,11 @@ service cloud.firestore {
     match /suscriptores/{email} {
       allow create: if true;
       allow read, update, delete: if isAdmin();
+
+      match /historialPagos/{pago} {
+        allow read: if isAdmin();
+        allow write: if false;
+      }
     }
   }
 }

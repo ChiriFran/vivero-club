@@ -1,7 +1,9 @@
+const CLUB_NAME = import.meta.env.VITE_CLUB_NOMBRE || "Vivero Club";
+
 export const DEFAULT_CONTENT = {
   hero: {
     badge: "Suscripción mensual",
-    titulo: "Vivero Club",
+    titulo: CLUB_NAME,
     subtitulo:
       "Suscribite a nuestro club del vivero y recibí cada mes una caja con plantas, macetas y productos seleccionados en tu puerta.",
     boton: "Quiero suscribirme",

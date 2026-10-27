@@ -6,6 +6,8 @@ import {
   doc,
   getDoc,
   getDocs,
+  orderBy,
+  query,
   setDoc,
   deleteDoc,
 } from "firebase/firestore";
@@ -13,6 +15,7 @@ import {
 const COLLECTION = import.meta.env.VITE_FIRESTORE_COLLECTION || "suscriptores";
 const CONFIG_COLLECTION = "config";
 const CONFIG_DOC = "landing";
+const HISTORIAL_SUBCOLLECTION = "historialPagos";
 
 function toSubscriber(id, data) {
   return {
@@ -30,11 +33,14 @@ function toSubscriber(id, data) {
     preferencias: Array.isArray(data.preferencias) ? data.preferencias : [],
     activo: data.activo === true,
     pendiente: data.pendiente === true,
+    mercadopago_plan_id: data.mercadopago_plan_id || null,
+    mercadopago_preapproval_id: data.mercadopago_preapproval_id || null,
     mercadopago_status: data.mercadopago_status || null,
     fechaAlta: data.fechaAlta || null,
     fechaPrimerPago: data.fechaPrimerPago || null,
     fechaUltimoPago: data.fechaUltimoPago || null,
     fechaProximoCobro: data.fechaProximoCobro || null,
+    fechaCancelacion: data.fechaCancelacion || null,
   };
 }
 
@@ -76,6 +82,21 @@ export async function fetchSubscribers() {
   return { suscriptores, stats: buildStats(suscriptores) };
 }
 
+export async function fetchHistorial(email) {
+  const id = String(email).trim().toLowerCase();
+  const ref = collection(db, COLLECTION, id, HISTORIAL_SUBCOLLECTION);
+
+  try {
+    const snap = await getDocs(query(ref, orderBy("fecha", "desc")));
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  } catch {
+    const snap = await getDocs(ref);
+    return snap.docs
+      .map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => String(b.fecha || "").localeCompare(String(a.fecha || "")));
+  }
+}
+
 export async function updateSubscriber(email, action) {
   const id = String(email).trim().toLowerCase();
   const ref = doc(db, COLLECTION, id);
@@ -85,19 +106,30 @@ export async function updateSubscriber(email, action) {
   if (action === "activar") {
     await setDoc(
       ref,
-      { activo: true, pendiente: false, mercadopago_status: "authorized" },
+      { activo: true, pendiente: false, mercadopago_status: "manual" },
       { merge: true }
     );
   } else if (action === "pausar") {
     await setDoc(
       ref,
-      { activo: false, pendiente: true, mercadopago_status: "paused" },
+      {
+        activo: false,
+        pendiente: true,
+        mercadopago_status: "paused",
+        fechaProximoCobro: null,
+      },
       { merge: true }
     );
   } else if (action === "cancelar") {
     await setDoc(
       ref,
-      { activo: false, pendiente: true, mercadopago_status: "cancelled" },
+      {
+        activo: false,
+        pendiente: false,
+        mercadopago_status: "cancelled",
+        fechaCancelacion: new Date().toISOString(),
+        fechaProximoCobro: null,
+      },
       { merge: true }
     );
   } else if (action === "eliminar") {

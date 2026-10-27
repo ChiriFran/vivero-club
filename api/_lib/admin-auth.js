@@ -1,4 +1,4 @@
-import admin from "firebase-admin";
+import { getAuth } from "firebase-admin/auth";
 import { getFirebaseAdmin } from "./firebase-admin.js";
 
 export function getAdminUids() {
@@ -28,7 +28,7 @@ export async function requireAdmin(req, res) {
 
   try {
     const app = getFirebaseAdmin();
-    const decoded = await admin.auth(app).verifyIdToken(token);
+    const decoded = await getAuth(app).verifyIdToken(token);
 
     if (!adminUids.includes(decoded.uid)) {
       res
